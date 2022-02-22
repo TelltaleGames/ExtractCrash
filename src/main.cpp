@@ -1,3 +1,5 @@
+// Copyright (c) 2022 Telltale Games. All rights reserved.
+// See LICENSE for usage, modification, and distribution terms.
 #include <iostream>
 #include <vector>
 #include <string>
