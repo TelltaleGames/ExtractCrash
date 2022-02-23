@@ -5,7 +5,23 @@
 #include <string>
 #include <assert.h>
 #include "zlib.h"
+
 #define CHUNK 16384
+#define DECOMPRESS_BUFFER 1024 * 1024 * 32
+
+void FormatDir(std::string& dir)
+{
+    char last_char = dir[dir.length() - 1];
+    if (last_char != '\\' && last_char != '/')
+        dir.append("\\");
+}
+
+void JoinPath(std::string& a, std::string& b, std::string& out)
+{
+    FormatDir(a);
+
+    out = a + b;
+}
 
 int main(int argc, const char** argv) {
     if(argc != 3) {
@@ -13,27 +29,32 @@ int main(int argc, const char** argv) {
         return 0;
     }
     FILE* source = fopen(argv[1], "rb");
-    FILE* dest = fopen(argv[2], "wb");
+    uint8_t* dest = new uint8_t[DECOMPRESS_BUFFER];
+    uint64_t dest_pos = 0;
+    std::string out_dir(argv[2]);
 
+    // ----------------------------------
+    // Decompress the input file
+    // ----------------------------------
     unsigned char in[CHUNK];
     unsigned char out[CHUNK];
-    unsigned have;
+    uint64_t have;
     z_stream strm;
 
     strm.zalloc = Z_NULL;
     strm.zfree = Z_NULL;
     strm.opaque = Z_NULL;
-    strm.avail_in = 0; // size of input
-    strm.next_in = Z_NULL; // input char array
+    strm.avail_in = 0;
+    strm.next_in = Z_NULL;
 
-    // the actual DE-compression work.
+    // Decompress the file
     int ret = inflateInit(&strm);
     if (ret != Z_OK) {
         printf("Decompress failed! %d\n", ret);
         return ret;
     }
 
-    /* decompress until deflate stream ends or end of file */
+    // Keep inflating until the stream ends or end of file
     do {
         strm.avail_in = fread(in, 1, CHUNK, source);
 
@@ -47,15 +68,17 @@ int main(int argc, const char** argv) {
 
         strm.next_in = in;
 
-        /* run inflate() on input until output buffer not full */
+        // Run inflate() on input until output buffer not full
         do {
             strm.avail_out = CHUNK;
             strm.next_out = out;
             ret = inflate(&strm, Z_NO_FLUSH);
-            assert(ret != Z_STREAM_ERROR);  /* state not clobbered */
+
+            assert(ret != Z_STREAM_ERROR);
+
             switch (ret) {
             case Z_NEED_DICT:
-                ret = Z_DATA_ERROR;     /* and fall through */
+                ret = Z_DATA_ERROR; // And fall through
             case Z_DATA_ERROR:
             case Z_MEM_ERROR:
                 (void)inflateEnd(&strm);
@@ -63,20 +86,73 @@ int main(int argc, const char** argv) {
             }
 
             have = CHUNK - strm.avail_out;
-
-            if (fwrite(out, 1, have, dest) != have || ferror(dest)) {
-                (void)inflateEnd(&strm);
-                return Z_ERRNO;
-            }
+            memcpy(dest + dest_pos, out, have);
+            dest_pos += have;
         } while (strm.avail_out == 0);
 
-        /* done when inflate() says it's done */
+        // Done when inflate() says it's done
     } while (ret != Z_STREAM_END);
 
-    /* clean up and return */
+    // Cleanup the decompress stream
     (void)inflateEnd(&strm);
 
-    return ret == Z_STREAM_END ? Z_OK : Z_DATA_ERROR;
+    if (Z_STREAM_END != Z_OK) {
+        printf("Decompress failed.");
+        return Z_DATA_ERROR;
+    }
+    // ----------------------------------
 
-    return 0;
+
+    // ----------------------------------
+    // Output to files
+    // ----------------------------------
+    uint8_t* pos = dest;
+
+    // Read the header
+    const unsigned header_len = 540;
+    char header[header_len];
+    memcpy(header, pos, header_len);
+    pos += header_len;
+    uint64_t offset = 0;
+    int32_t file_index = 0;
+
+    // Output the files.
+    // For now I'm just going off of 4 files.
+    // There's a bitmore data at the end but I'm not sure what it's for
+    while (file_index < 4) {
+        uint32_t name_len;
+        memcpy(&name_len, pos, sizeof(name_len));
+        pos += sizeof(name_len);
+
+        char* name = new char[name_len + 1u];
+        memcpy(name, pos, name_len);
+        name[name_len] = '\0';
+        pos += name_len;
+        printf("%s\n", name);
+
+        int32_t file_len;
+        memcpy(&file_len, pos, sizeof(file_len));
+        pos += sizeof(file_len);
+
+        char* file = new char[file_len];
+        memcpy(file, pos, file_len);
+        pos += file_len;
+
+        memcpy(&file_index, pos, sizeof(file_index));
+        pos += sizeof(file_index);
+
+        std::string out_path;
+        JoinPath(out_dir, std::string(name), out_path);
+        FILE* out_file = fopen(out_path.c_str(), "wb");
+        fwrite(file, 1, file_len, out_file);
+        fclose(out_file);
+
+        delete[] name;
+        delete[] file;
+    }
+
+    delete[] dest;
+    // ----------------------------------
+
+    return ret == Z_STREAM_END ? Z_OK : Z_DATA_ERROR;
 }
