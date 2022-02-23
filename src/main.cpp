@@ -9,18 +9,36 @@
 #define CHUNK 16384
 #define DECOMPRESS_BUFFER 1024 * 1024 * 32
 
-void FormatDir(std::string& dir)
-{
+int32_t length_buf;
+char str_buf[1024];
+
+void FormatDir(std::string& dir) {
     char last_char = dir[dir.length() - 1];
     if (last_char != '\\' && last_char != '/')
         dir.append("\\");
 }
 
-void JoinPath(std::string& a, std::string& b, std::string& out)
-{
+void JoinPath(std::string& a, std::string& b, std::string& out) {
     FormatDir(a);
 
     out = a + b;
+}
+
+int32_t& ReadCrashLength(uint8_t*& source) {
+    memcpy(&length_buf, source, 4);
+    source += 4;
+
+    return length_buf;
+}
+
+char* ReadCrashString(uint8_t*& source) {
+    int32_t& str_len = ReadCrashLength(source);
+    memset(str_buf, 0, sizeof(str_buf));
+    memcpy(str_buf, source, str_len);
+    str_buf[sizeof(str_buf) - 1] = '\0';
+    source += str_len;
+
+    return str_buf;
 }
 
 int main(int argc, const char** argv) {
@@ -107,52 +125,39 @@ int main(int argc, const char** argv) {
     // Output to files
     // ----------------------------------
     uint8_t* pos = dest;
+    int32_t file_index = 0;
 
     // Read the header
-    const unsigned header_len = 540;
-    char header[header_len];
-    memcpy(header, pos, header_len);
-    pos += header_len;
-    uint64_t offset = 0;
-    int32_t file_index = 0;
+    std::string header1 = ReadCrashString(pos);
+    std::string header2 = ReadCrashString(pos);
+    pos += 12;
 
     // Output the files.
     // For now I'm just going off of 4 files.
-    // There's a bitmore data at the end but I'm not sure what it's for
+    // There's a bit more data at the end but I'm not sure what it's for
     while (file_index < 4) {
-        uint32_t name_len;
-        memcpy(&name_len, pos, sizeof(name_len));
-        pos += sizeof(name_len);
+        std::string file_name = ReadCrashString(pos);
+        printf("Getting file: %s\n", file_name.c_str());
 
-        char* name = new char[name_len + 1u];
-        memcpy(name, pos, name_len);
-        name[name_len] = '\0';
-        pos += name_len;
-        printf("%s\n", name);
-
-        int32_t file_len;
-        memcpy(&file_len, pos, sizeof(file_len));
-        pos += sizeof(file_len);
-
-        char* file = new char[file_len];
-        memcpy(file, pos, file_len);
+        int32_t file_len = ReadCrashLength(pos);
+        char* file_contents = new char[file_len];
+        memcpy(file_contents, pos, file_len);
         pos += file_len;
 
-        memcpy(&file_index, pos, sizeof(file_index));
-        pos += sizeof(file_index);
-
+        file_index = ReadCrashLength(pos);
+        
+        // Output file
         std::string out_path;
-        JoinPath(out_dir, std::string(name), out_path);
+        JoinPath(out_dir, file_name, out_path);
         FILE* out_file = fopen(out_path.c_str(), "wb");
-        fwrite(file, 1, file_len, out_file);
+        fwrite(file_contents, 1, file_len, out_file);
         fclose(out_file);
 
-        delete[] name;
-        delete[] file;
+        delete[] file_contents;
     }
 
     delete[] dest;
     // ----------------------------------
 
-    return ret == Z_STREAM_END ? Z_OK : Z_DATA_ERROR;
+    return 0;
 }
