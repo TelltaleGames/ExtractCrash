@@ -96,7 +96,7 @@ int main(int argc, const char** argv) {
     // Cleanup the decompress stream
     (void)inflateEnd(&strm);
 
-    if (Z_STREAM_END != Z_OK) {
+    if (ret != Z_STREAM_END) {
         printf("Decompress failed.");
         return Z_DATA_ERROR;
     }
